@@ -44,12 +44,18 @@ def draw_bbox(img):
 # read from camera
 cap = cv2.VideoCapture(0) 
 
+# 取得影像的尺寸大小
+video_width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+video_height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+print(f"Image Size: {video_width}, {video_height}")
+
 # 點擊後動作判斷
+mouse_xy = []
 def mouse_action(event, x, y, flags, frame):
-    global track_BBoxs
-    global box_len
-    
-    
+    global track_BBoxs, box_len, mouse_xy
+
+    mouse_xy = [x, y]
+    #print(f'x={x}, y={y}')
     color_len = len(bbox_color)
     
     if event == cv2.EVENT_LBUTTONDOWN:
@@ -67,7 +73,8 @@ def mouse_action(event, x, y, flags, frame):
             'range' : (x-box_len, y-box_len, x+box_len, y+box_len),
             'onoff' : True,
             }
-    print(f'track_BBoxs = {track_BBoxs}')
+    if track_BBoxs:
+        print(f'track_BBoxs = {track_BBoxs}')
 
 # window
 cv2.namedWindow('Cam')
@@ -76,7 +83,20 @@ cv2.namedWindow('Cam')
 k = 0
 while k!= ord('q'):
   ret, frame = cap.read()
+  
   cv2.setMouseCallback('Cam', mouse_action, frame)
+  
+  
+  # 將滑鼠目前 x, y寫在圖上
+  if mouse_xy:
+    try:
+        cv2.putText(frame, f'X={mouse_xy[0]}, Y={mouse_xy[1]}', (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (210, 210, 210), 2)
+    except:
+        pass
+  
+  # 將按鈕說明寫在圖上
+  cv2.putText(frame, f'Press "q" to quit...', (10, int(video_height-20)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (210, 210, 210), 2)
+  
   # Display the image
   cv2.imshow("Cam", draw_bbox(frame))
   k = cv2.waitKey(1)  & 0xFF
