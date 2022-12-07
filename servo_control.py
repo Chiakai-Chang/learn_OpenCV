@@ -1,6 +1,7 @@
 import pigpio
 import time
 import cv2
+import traceback
 
 # 設置連線到哪
 pi = pigpio.pi('192.168.8.103',8888)
@@ -92,56 +93,60 @@ print(f"Image Size: {video_width}, {video_height}")
 p1 = None
 p2 = None
 
-while True:
-    ret, frame = cap.read()
-    if not ret:
-        print("Cannot receive frame")
-        break
-    #frame = cv2.resize(frame,(540,300))  # 縮小尺寸，加快速度
-    keyName = cv2.waitKey(1)
+try:
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            print("Cannot receive frame")
+            break
+        #frame = cv2.resize(frame,(540,300))  # 縮小尺寸，加快速度
+        keyName = cv2.waitKey(1)
 
-    if keyName == ord('q'):
-        break
-    if keyName == ord('a'):
-        area = cv2.selectROI('oxxostudio', frame, showCrosshair=False, fromCenter=False)
-        tracker.init(frame, area)    # 初始化追蹤器
-        tracking = True              # 設定可以開始追蹤
-    if tracking:
-        success, point = tracker.update(frame)   # 追蹤成功後，不斷回傳左上和右下的座標
-        if success:
-            p1 = [int(point[0]), int(point[1])]
-            p2 = [int(point[0] + point[2]), int(point[1] + point[3])]
-            cv2.rectangle(frame, p1, p2, (0,0,255), 3)   # 根據座標，繪製四邊形，框住要追蹤的物件
+        if keyName == ord('q'):
+            break
+        if keyName == ord('a'):
+            area = cv2.selectROI('oxxostudio', frame, showCrosshair=False, fromCenter=False)
+            tracker.init(frame, area)    # 初始化追蹤器
+            tracking = True              # 設定可以開始追蹤
+        if tracking:
+            success, point = tracker.update(frame)   # 追蹤成功後，不斷回傳左上和右下的座標
+            if success:
+                p1 = [int(point[0]), int(point[1])]
+                p2 = [int(point[0] + point[2]), int(point[1] + point[3])]
+                cv2.rectangle(frame, p1, p2, (0,0,255), 3)   # 根據座標，繪製四邊形，框住要追蹤的物件
 
-        # 追蹤移動攝影機對齊追蹤物體的中心
-        if  p1 and p2:
-            track_ud = (p1[1] + p2[1]) / 2
-            track_lr = (p1[0] + p2[0]) / 2
-            new_lr, new_ud = servo_move(
-                                current_ud = servo_ud,
-                                current_lr = servo_lr,
-                                center_ud = center_ud,
-                                center_lr = center_lr,
-                                track_ud = track_ud,
-                                track_lr = track_lr,
-                                move_rate = 1,
-                                )
-           
-            servo_ud = new_ud
-            servo_lr = new_lr
-            #print(f'>>[servo移動] x = {servo_lr}, y = {servo_ud}')
-           
-            pi.set_servo_pulsewidth(servo_updown, new_ud)
-            pi.set_servo_pulsewidth(servo_leftright, new_lr)
-            
-
-
-    cv2.imshow('oxxostudio', frame)
+            # 追蹤移動攝影機對齊追蹤物體的中心
+            if  p1 and p2:
+                track_ud = (p1[1] + p2[1]) / 2
+                track_lr = (p1[0] + p2[0]) / 2
+                new_lr, new_ud = servo_move(
+                                    current_ud = servo_ud,
+                                    current_lr = servo_lr,
+                                    center_ud = center_ud,
+                                    center_lr = center_lr,
+                                    track_ud = track_ud,
+                                    track_lr = track_lr,
+                                    move_rate = 1,
+                                    )
+               
+                servo_ud = new_ud
+                servo_lr = new_lr
+                #print(f'>>[servo移動] x = {servo_lr}, y = {servo_ud}')
+               
+                pi.set_servo_pulsewidth(servo_updown, new_ud)
+                pi.set_servo_pulsewidth(servo_leftright, new_lr)
+                
 
 
-cap.release()
-cv2.destroyAllWindows()
+        cv2.imshow('oxxostudio', frame)
 
+
+    cap.release()
+    cv2.destroyAllWindows()
+except:
+    x = traceback.format_exc()
+    print(x)
+    
 # 將攝影機 servo 置中
 pi.set_servo_pulsewidth(servo_updown, 1500)
 pi.set_servo_pulsewidth(servo_leftright, 1500)
