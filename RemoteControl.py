@@ -13,10 +13,10 @@ import traceback
 class servo_control:
     
     # 追蹤器名稱
-    name = ''
+    name = 'Lumina Guardian'
     
     # 版本號
-    version = '20231220_1'
+    version = '20231221_0'
     
     # Pin 
     Pin_up_down = 1      # 橘(銀)線, PIN5, 0 ~ 180
@@ -35,6 +35,10 @@ class servo_control:
     tracking_right_down = [-1, -1]
     tracking_ud = -1 # Tracking Box 中央 y
     tracking_lr = -1 # Tracking Box 中央 x
+    
+    # 移動量計算方式
+    easy_count = False # True 時就是每次只動 1
+    smaller = 0.05
     
     # 若誤差不大就暫不移動
     allow_diff = 2
@@ -149,11 +153,11 @@ class servo_control:
             y = None,
             ):
         if x and y:
-            self.diff_lr =  x - self.center_lr
-            self.diff_ud =  self.center_ud - y      
+            self.diff_ud =  y - self.center_ud   
+            self.diff_lr =  self.center_lr - x   
         else:
-            self.diff_ud =  self.tracking_ud - self.center_ud
-            self.diff_lr =  self.center_lr - self.tracking_lr   
+            self.diff_ud =  self.tracking_ud - self.center_ud  
+            self.diff_lr =  self.center_lr - self.tracking_lr 
         print(f'center_ud = {self.center_ud}')
         print(f'center_lr = {self.center_lr}')
         print(f'diff_ud = {self.diff_ud}')
@@ -161,6 +165,8 @@ class servo_control:
     
     def move_updown(self, value):
         new_ud_value = self.current_ud_value + (value * self.move_rate)
+        # 必須要確保是整數
+        new_ud_value = int(new_ud_value)
         if 0 <= new_ud_value <= 180:
             self.current_ud_value = new_ud_value
             command = f"{self.Pin_up_down} {self.current_ud_value}\n"
@@ -171,6 +177,8 @@ class servo_control:
 
     def move_leftright(self, value):
         new_lr_value = self.current_lr_value + (value * self.move_rate)
+        # 必須要確保是整數
+        new_lr_value = int(new_lr_value)
         if 0 <= new_lr_value <= 180:
             self.current_lr_value = new_lr_value
             command = f"{self.Pin_left_right} {self.current_lr_value}\n"
@@ -248,7 +256,7 @@ class servo_control:
                     print("Cannot receive frame")
                     break
                 
-                cv2.setMouseCallback('Remote Guard', self.mouse_action, frame)
+                cv2.setMouseCallback(self.name, self.mouse_action, frame)
                 
                 try:
                     cv2.putText(frame, f'X={self.mouse_xy[0]}, Y={self.mouse_xy[1]}', (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (210, 210, 210), 2)
@@ -256,19 +264,28 @@ class servo_control:
                     pass
                 #frame = cv2.resize(frame,(540,300))  # 縮小尺寸，加快速度
                 # 將按鈕說明寫在圖上
-                cv2.putText(frame, 'Buttons:', (10, int(self.video_height-80)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (210, 210, 210), 2)
+                cv2.putText(frame, self.name, (int(self.video_width - 180), int(self.video_height-20)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (210, 210, 210), 2)
+                cv2.putText(frame, 'Buttons:', (10, int(self.video_height-110)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (210, 210, 210), 2)
+                cv2.putText(frame, '"m": Change Move Mode', (10, int(self.video_height-80)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (210, 210, 210), 2)
                 cv2.putText(frame, '"r": Reset Camera', (10, int(self.video_height-50)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (210, 210, 210), 2)
                 cv2.putText(frame, '"q": quit...', (10, int(self.video_height-20)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (210, 210, 210), 2)
 
-                cv2.imshow('Remote Guard', frame)
+                cv2.imshow(self.name, frame)
                 keyName = cv2.waitKey(1)  & 0xFF
                 
                 if keyName == ord('q'):
                     break
                 if keyName == ord('r'):
                     self.reset_servo()
+                if keyName == ord('m'):
+                    if self.easy_count:
+                        self.easy_count = False
+                        print('>>開啟「距中心點距離量」移動模式...')
+                    else:
+                        self.easy_count = True
+                        print('>>開啟「每次 1 刻度」移動模式')
                 if keyName == ord('a'):
-                    area = cv2.selectROI('Remote Guard', frame, showCrosshair=False, fromCenter=False)
+                    area = cv2.selectROI(self.name, frame, showCrosshair=False, fromCenter=False)
                     print(f'area = {area}')
                     self.tracker.init(frame, area)    # 初始化追蹤器
                     self.tracking = True              # 設定可以開始追蹤
@@ -317,15 +334,20 @@ class servo_control:
                     self.count_diff(self.mouse_xy[0], self.mouse_xy[1])
                     
                     # 移動鏡頭
-                    if self.diff_ud < 0:
-                        self.move_updown(1)
-                    elif self.diff_ud > 0:
-                        self.move_updown(-1)
-                    
-                    if self.diff_lr < 0:
-                        self.move_leftright(1)
-                    elif self.diff_lr > 0:
-                        self.move_leftright(-1)
+                    if self.easy_count:
+                        if self.diff_ud < 0:
+                            self.move_updown(1)
+                        elif self.diff_ud > 0:
+                            self.move_updown(-1)
+                        
+                        if self.diff_lr < 0:
+                            self.move_leftright(1)
+                        elif self.diff_lr > 0:
+                            self.move_leftright(-1)
+                    else:
+                        # 用移動量去計算
+                        self.move_updown(self.diff_ud * self.smaller)
+                        self.move_leftright(self.diff_lr * self.smaller)
                         
             self.cap.release()
             cv2.destroyAllWindows()
@@ -334,6 +356,6 @@ class servo_control:
             print(x)
 
 if __name__ == '__main__':
-    controller = servo_control('COM4')
+    Guardian = servo_control('COM4')
 
 
