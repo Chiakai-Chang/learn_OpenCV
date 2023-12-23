@@ -9,6 +9,20 @@ import serial
 import time
 import cv2
 import traceback
+import json
+
+def send_servo_command(ser, servo_number, position):
+    """
+    向 ESP32S3 发送伺服电机控制命令。
+    :param ser: 串行端口对象
+    :param servo_number: 伺服电机编号
+    :param position: 伺服电机的目标位置
+    """
+    command = {"servoNumber": servo_number, "position": position}
+    print(command)
+    json_command = json.dumps(command) + "\n"  # 转换为 JSON 并添加换行符
+    ser.write(json_command.encode('utf-8'))
+    time.sleep(0.02)
 
 class servo_control:
     
@@ -16,12 +30,12 @@ class servo_control:
     name = 'Lumina Guardian'
     
     # 版本號
-    version = '20231221_0'
+    version = '20231223_0'
     
     # Pin 
-    Pin_up_down = 1      # 橘(銀)線, PIN5, 0 ~ 180
-    Pin_left_right = 2   # 綠線, PIN11, 0 ~ 180
-    Pin_on_off = 3       # 橘線, PIN3, 70 == on, 180 == off
+    Pin_up_down = 1      # 橘(銀)線, PIN 10, 40 ~ 160
+    Pin_left_right = 2   # 綠線,     PIN 13, 40 ~ 160
+    Pin_on_off = 3       # 橘線,     PIN 3,  70 == on, 180 == off
 
     # 紀錄 servo 目前數值
     current_ud_value = 90
@@ -68,20 +82,27 @@ class servo_control:
     def __init__(
             self, 
             # Serial 要通訊的 COM_PORT
-            COM_PORT,
+            COM_PORT_udlr,
+            COM_PORT_on,
             Baud_rate = 115200,
             # 鏡頭編號
             camera_id = 1,
             # 移動的比率
             move_rate = 1,
             ):
-        
-        self.COM_PORT = COM_PORT
+    
+        self.COM_PORT_udlr = COM_PORT_udlr
+        self.COM_PORT_on = COM_PORT_on
         self.Baud_rate = Baud_rate
         self.camera_id = camera_id
         
         # Serial 溝通物件
-        self.controller = serial.Serial(self.COM_PORT, self.Baud_rate, timeout=1)
+        if COM_PORT_udlr == COM_PORT_on:
+            self.controller = serial.Serial(self.COM_PORT_udlr, self.Baud_rate, timeout=1)
+            self.controller_on = self.controller
+        else:
+            self.controller = serial.Serial(self.COM_PORT_udlr, self.Baud_rate, timeout=1)
+            self.controller_on = serial.Serial(self.COM_PORT_on, self.Baud_rate, timeout=1)
         
         print('>>Servo 已啟動...')
         self.reset_servo()
@@ -102,11 +123,7 @@ class servo_control:
         # 畫面中心點
         self.center_ud =  self.video_height / 2
         self.center_lr =  self.video_width / 2
-        
-        # 取得影像尺寸與 0 ~ 180 之間的 ratio
-        self.ud_ratio = 180 / (self.video_height * 9) 
-        self.lr_ratio = 180 / (self.video_width * 9)
-        
+  
         # 移動的倍率(好像用不到)
         self.move_rate = move_rate
         
@@ -125,27 +142,54 @@ class servo_control:
         self.current_lr_value = 90
         self.current_onoff = 0
         
-        for p, v in [
-                (self.Pin_up_down, self.current_ud_value),
-                (self.Pin_left_right, self.current_lr_value),
-                (self.Pin_on_off, 180),
-                ]:
-            command = f"{p} {v}\n"
-            print(f'command = {command}'.strip())
-            self.controller.write(command.encode())
+        send_servo_command(
+            self.controller,
+            self.Pin_up_down,
+            self.current_ud_value,
+            )
+        send_servo_command(
+            self.controller,
+            self.Pin_left_right,
+            self.current_lr_value,
+            )
+        send_servo_command(
+            self.controller_on,
+            self.Pin_on_off,
+            180,
+            )
+        
         print('>>Servo 位置已歸零...')
     
     def light_on(self):
         self.current_onoff = 1
-        command = f"{self.Pin_on_off} 70\n"
-        print(f'command = {command}'.strip())
-        self.controller.write(command.encode())
-    
+        command = {"servoNumber": self.Pin_on_off, "position": 70}
+        json_command = json.dumps(command) + "\n" 
+        print(json_command)
+        self.controller_on.write(json_command.encode('utf-8'))
+
     def light_off(self):
         self.current_onoff = 0
-        command = f"{self.Pin_on_off} 180\n"
-        print(f'command = {command}'.strip())
-        self.controller.write(command.encode())
+        command = {"servoNumber": self.Pin_on_off, "position": 180}
+        json_command = json.dumps(command) + "\n" 
+        print(json_command)
+        self.controller_on.write(json_command.encode('utf-8'))
+    
+    def count_move_rate(self, diff):
+        # 計算要移動的距離，是佔畫面一半的多少比例
+        # 若是 1/2 以內，都只移動 1
+        # 若是 1/2 ~ 3/4 內，移動 2
+        # 若是 3/4 ~ 1 內，移動 3
+        if abs(diff) <= 0.75:
+            step = 1 
+        else:
+            step = 2
+        
+        # 只取正負數
+        if diff < 0:
+            step = step * -1
+        elif diff == 0:
+            step = 0
+        return int(step)
     
     def count_diff(
             self,
@@ -153,39 +197,56 @@ class servo_control:
             y = None,
             ):
         if x and y:
-            self.diff_ud =  y - self.center_ud   
-            self.diff_lr =  self.center_lr - x   
+            self.diff_ud =  y - self.center_ud
+            self.diff_lr =  self.center_lr - x
         else:
-            self.diff_ud =  self.tracking_ud - self.center_ud  
-            self.diff_lr =  self.center_lr - self.tracking_lr 
-        print(f'center_ud = {self.center_ud}')
-        print(f'center_lr = {self.center_lr}')
-        print(f'diff_ud = {self.diff_ud}')
-        print(f'diff_lr = {self.diff_lr}')
+            self.diff_ud =  self.tracking_ud - self.center_ud
+            self.diff_lr =  self.center_lr - self.tracking_lr
+        #print(f'center_ud = {self.center_ud}')
+        #print(f'center_lr = {self.center_lr}')
+        #print(f'diff_ud = {self.diff_ud}')
+        #print(f'diff_lr = {self.diff_lr}')
+        
+        # return 該 diff 是畫面長寬一半的比例
+        self.moving_rate_ud = self.diff_ud / (self.video_height/2)
+        self.step_ud = self.count_move_rate(self.moving_rate_ud)
+        print(f'>>因 y 軸距離為: {self.moving_rate_ud}')
+        print(f'>>所以 y 軸決定移動: {self.step_ud}')
+        
+        self.moving_rate_lr = self.diff_lr / (self.video_width/2)
+        self.step_lr = self.count_move_rate(self.moving_rate_lr)
+        print(f'>>因 x 軸距離為: {self.moving_rate_lr}')
+        print(f'>>所以 x 軸決定移動: {self.step_lr}')
     
     def move_updown(self, value):
-        new_ud_value = self.current_ud_value + (value * self.move_rate)
+        new_ud_value = self.current_ud_value + value
         # 必須要確保是整數
         new_ud_value = int(new_ud_value)
-        if 0 <= new_ud_value <= 180:
+        if 30 <= new_ud_value <= 160:
             self.current_ud_value = new_ud_value
-            command = f"{self.Pin_up_down} {self.current_ud_value}\n"
-            print(f'command = {command}'.strip())
-            self.controller.write(command.encode())
+            send_servo_command(
+                self.controller, 
+                self.Pin_up_down,
+                self.current_ud_value,
+                )
         else:
-            print(f'[Limit] Servo ud 想移動到: {new_ud_value}, 已超出可移動範圍...')
+            print(f'[Limit] Servo ud 想移動到: {new_ud_value}, 但已超出可移動範圍...')
+        self.show_servo_position()
 
     def move_leftright(self, value):
-        new_lr_value = self.current_lr_value + (value * self.move_rate)
+        new_lr_value = self.current_lr_value + value
         # 必須要確保是整數
         new_lr_value = int(new_lr_value)
-        if 0 <= new_lr_value <= 180:
+        if 30 <= new_lr_value <= 160:
             self.current_lr_value = new_lr_value
-            command = f"{self.Pin_left_right} {self.current_lr_value}\n"
-            print(f'command = {command}'.strip())
-            self.controller.write(command.encode())
+            send_servo_command(
+                self.controller, 
+                self.Pin_left_right,
+                self.current_lr_value,
+                )
         else:
             print(f'[Limit] Servo lr 想移動到: {new_lr_value}, 已超出可移動範圍...')
+        self.show_servo_position()
 
     def mouse_action(self, event, x, y, flags, frame):
         self.frame = frame
@@ -247,7 +308,13 @@ class servo_control:
                 #self.tracker.init(frame, area)    # 初始化追蹤器
                 #self.tracking = True              # 設定可以開始追蹤
                 #self.light_on()
-            
+    
+    def show_servo_position(self):
+        print('>>當前 Servo Postions:')
+        print(f'[UD] {self.current_ud_value}')
+        print(f'[LR] {self.current_lr_value}')
+        print(f'[OF] {self.current_onoff}')        
+    
     def run(self):
         try:
             while True:
@@ -277,6 +344,8 @@ class servo_control:
                     break
                 if keyName == ord('r'):
                     self.reset_servo()
+                if keyName == ord('s'):
+                    self.show_servo_position()
                 if keyName == ord('m'):
                     if self.easy_count:
                         self.easy_count = False
@@ -346,9 +415,9 @@ class servo_control:
                             self.move_leftright(-1)
                     else:
                         # 用移動量去計算
-                        self.move_updown(self.diff_ud * self.smaller)
-                        self.move_leftright(self.diff_lr * self.smaller)
-                        
+                        self.move_updown(self.step_ud)
+                        self.move_leftright(self.step_lr)
+                
             self.cap.release()
             cv2.destroyAllWindows()
         except:
@@ -356,6 +425,6 @@ class servo_control:
             print(x)
 
 if __name__ == '__main__':
-    Guardian = servo_control('COM4')
+    Guardian = servo_control('COM7', 'COM7')
 
 
