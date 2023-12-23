@@ -241,12 +241,14 @@ class LuminaGuardian:
         
         if abs(diff) <= 0.3:
             step = 1 
-        elif abs(diff) <= 0.5:
+        elif abs(diff) <= 0.4:
             step = 2
-        elif abs(diff) <= 0.7:
+        elif abs(diff) <= 0.6:
             step = 3
-        else:
+        elif abs(diff) <= 0.8:
             step = 4
+        else:
+            step = 5
         
         # 只取正負數
         if diff < 0:
