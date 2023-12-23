@@ -24,13 +24,13 @@ def send_servo_command(ser, servo_number, position):
     ser.write(json_command.encode('utf-8'))
     time.sleep(0.02)
 
-class servo_control:
+class LuminaGuardian:
     
     # 追蹤器名稱
     name = 'Lumina Guardian'
     
     # 版本號
-    version = '20231223_0'
+    version = '20231224_0'
     
     # Pin 
     Pin_up_down = 1      # 橘(銀)線, PIN 10, 40 ~ 160
@@ -52,10 +52,9 @@ class servo_control:
     
     # 移動量計算方式
     easy_count = False # True 時就是每次只動 1
-    smaller = 0.05
     
     # 若誤差不大就暫不移動
-    allow_diff = 2
+    ignore_move_diff_ratio = 0.05
     
     # 若太久就自動 Reset
     idle_start = 0
@@ -66,18 +65,46 @@ class servo_control:
     
     # 與鏡頭畫面互動
     mouse_xy = [] # 當前滑鼠座標位置
-    roi_wait_start = -1  # 按下滑鼠以後，開始等待
-    roi_wait_count = 0   # 累積等待多久
-    roi_wait_limit = 1.5 # 按下滑鼠到放開多久才算
-    roi_click_down = []  # 儲存可能的 BBox 第一個點位
-    roi_click_up   = []  # 儲存可能的 BBox 第二個點位
-    # 會從前兩個算出左上右下
-    roi_bbox_left_up = [] 
-    roi_bbox_right_down = []
+    
+    # tracking box 預設大小
+    # 因為用 ROI 框左上右下的方式，操作太複雜沒有爽感
+    # 所以改用直接一點就追蹤
+    tracking_box_size = 0.4
+    # tracking_box = (x, y, w, h)
+    # x 和 y 座標標識了選定區域的起始點 (0, 0 在左上)
+    # w 和 h 描述了從這個起點開始的區域的寬度和高度
+    tracking_box = [] 
+    
+    # 啟動追蹤條件
+    track_wait_start = 0
+    hold_to_activate_tracking = 0.5
+    hold_lapse_time = 0
+    
+    # 繪製追蹤的 Box
+    tracking_point_to_draw = []
+    
+    # 物件消失後，多久恢復原位
+    reset_count = 0
+    time_to_reset = 100 # 個 loop
+    
+    # 模式切換
+    # 0 = 預設 (移動模式: 距離變速模式)
+    # 1 = 經典 (移動模式: 固定一步模式)
+    mode_option = [
+        '移動模式: 距離變速模式',
+        '移動模式: 固定一步模式',
+        ]
+    mode_idx = 0
     
     # 滑鼠事件
     mouse_event = None 
     mouse_clicked_not_up = False
+    
+    def chang_mode(self):
+        self.mode_idx += 1 
+        if self.mode_idx >= len(self.mode_option):
+            self.mode_idx = 0
+        print(f'>>切換模式{self.mode_idx + 1}: {self.mode_option[self.mode_idx]}')
     
     def __init__(
             self, 
@@ -86,9 +113,10 @@ class servo_control:
             COM_PORT_on,
             Baud_rate = 115200,
             # 鏡頭編號
-            camera_id = 1,
-            # 移動的比率
-            move_rate = 1,
+            camera_id = 1, # 因為筆電幾乎都有內建，所以預設不是 0
+            # 點擊以後，要以多大的 Box 去追蹤
+            # 是相對於顯示畫面的大小比例
+            tracking_box_size = 0.4,
             ):
     
         self.COM_PORT_udlr = COM_PORT_udlr
@@ -123,9 +151,6 @@ class servo_control:
         # 畫面中心點
         self.center_ud =  self.video_height / 2
         self.center_lr =  self.video_width / 2
-  
-        # 移動的倍率(好像用不到)
-        self.move_rate = move_rate
         
         # 創建追蹤器
         # 特別註記
@@ -133,9 +158,40 @@ class servo_control:
         # pip install opencv-contrib-python==4.5.1.48
         self.tracker = cv2.TrackerCSRT_create()  
         
+        # 計算 Tracking_Box_size
+        self.tracking_box_size = tracking_box_size
+        self.tracking_width = self.video_width * self.tracking_box_size
+        self.tracking_height = self.video_height * self.tracking_box_size
+
         self.run()
         print('>>已開啟鏡頭...')        
         
+    def click_to_box(self, x_center, y_center):
+        # 計算點擊位置為中心，延伸的 Box 參數
+        # (x, y, w, h)
+        # x 和 y 座標標識了選定區域的起始點(0, 0 在左上)
+        # w 和 h 描述了從這個起點開始的區域的寬度和高度
+        x = x_center - (self.tracking_width / 2)
+        if x < 0:
+            x = 0 # 以免 box 超出鏡頭
+        
+        y = y_center - (self.tracking_height / 2)
+        if y < 0:
+            y = 0 # 以免 box 超出鏡頭
+            
+        w = self.tracking_width / 2
+        if (x + w) > self.video_width:
+            # 以免 box 超出鏡頭
+            w = self.video_width - x
+            
+        h = self.tracking_height / 2
+        if (y + h) > self.video_height:
+            # 以免 box 超出鏡頭
+            w = self.video_height - y
+        
+        self.tracking_box = [x, y, w, h]
+        return self.tracking_box
+
     def reset_servo(self):
         # 將攝影機 servo 置中
         self.current_ud_value = 90
@@ -179,10 +235,18 @@ class servo_control:
         # 若是 1/2 以內，都只移動 1
         # 若是 1/2 ~ 3/4 內，移動 2
         # 若是 3/4 ~ 1 內，移動 3
-        if abs(diff) <= 0.75:
+        if abs(diff) <= self.ignore_move_diff_ratio:
+            step = 0
+            return int(step)
+        
+        if abs(diff) <= 0.3:
             step = 1 
-        else:
+        elif abs(diff) <= 0.5:
             step = 2
+        elif abs(diff) <= 0.7:
+            step = 3
+        else:
+            step = 4
         
         # 只取正負數
         if diff < 0:
@@ -219,6 +283,8 @@ class servo_control:
         print(f'>>所以 x 軸決定移動: {self.step_lr}')
     
     def move_updown(self, value):
+        if value == 0:
+            return None
         new_ud_value = self.current_ud_value + value
         # 必須要確保是整數
         new_ud_value = int(new_ud_value)
@@ -234,6 +300,8 @@ class servo_control:
         self.show_servo_position()
 
     def move_leftright(self, value):
+        if value == 0:
+            return None
         new_lr_value = self.current_lr_value + value
         # 必須要確保是整數
         new_lr_value = int(new_lr_value)
@@ -258,17 +326,17 @@ class servo_control:
            print(f'Position X: {x}')
            print(f'Position Y: {y}')
            
-           # 計算可能要畫 ROI BBox
-           self.roi_wait_start = time.time()
-           self.roi_click_down = [x, y]
+           # 計算大約按半秒以上才會追蹤
+           self.track_wait_start = time.time()
            self.count_diff(x, y)
            
            self.mouse_clicked_not_up = True
            
            # 如果開啟著 Tracking 點 Box 就關閉 Tracking
            if self.tracking:
-               if self.tracking_left_up[0] <= x <= self.tracking_right_down[0]:
-                   if self.tracking_left_up[1] <= y <= self.tracking_right_down[1]:
+               tx, ty, tw, th = self.tracking_box
+               if tx <= x <= (tx+tw):
+                   if ty <= y <= (ty + th):
                        print('>>停止追蹤...')
                        self.tracking = False
                        self.light_off()
@@ -288,26 +356,15 @@ class servo_control:
             self.mouse_clicked_not_up = False
             
             # 計算是否是在畫 ROI BBox
-            self.roi_wait_count = time.time() - self.roi_wait_start
-            if self.roi_wait_count >= self.roi_wait_limit:
-                self.roi_click_up = [x, y]
-                
-                # 計算左上右下
-                left  = min([self.roi_click_down[0], self.roi_click_up[0]])
-                right = max([self.roi_click_down[0], self.roi_click_up[0]])
-                up    = min([self.roi_click_down[1], self.roi_click_up[1]])
-                down  = max([self.roi_click_down[1], self.roi_click_up[1]])
-                
-                self.roi_bbox_left_up    = [left,  up]
-                self.roi_bbox_right_down = [right, down]
-                print(f'self.roi_bbox_left_up = {self.roi_bbox_left_up}')
-                print(f'self.roi_bbox_right_down = {self.roi_bbox_right_down}')
-                #area = cv2.selectROI(self.name, frame, showCrosshair=False, fromCenter=False)
-                #print(area)
-                #input()
-                #self.tracker.init(frame, area)    # 初始化追蹤器
-                #self.tracking = True              # 設定可以開始追蹤
-                #self.light_on()
+            self.hold_lapse_time = time.time() - self.track_wait_start
+            if self.hold_lapse_time >= self.hold_to_activate_tracking:
+                # 計算 Tracking box
+                area = self.click_to_box(x, y)
+                print(f'>>開始追蹤! (x:{x}, y:{y}')
+                print(f'Tracking Box: {self.tracking_box}')
+                self.tracker.init(frame, area)    # 初始化追蹤器
+                self.tracking = True              # 設定可以開始追蹤
+                self.light_on()
     
     def show_servo_position(self):
         print('>>當前 Servo Postions:')
@@ -316,6 +373,7 @@ class servo_control:
         print(f'[OF] {self.current_onoff}')        
     
     def run(self):
+        p1, p2 = [], []
         try:
             while True:
                 ret, frame = self.cap.read()
@@ -324,42 +382,7 @@ class servo_control:
                     break
                 
                 cv2.setMouseCallback(self.name, self.mouse_action, frame)
-                
-                try:
-                    cv2.putText(frame, f'X={self.mouse_xy[0]}, Y={self.mouse_xy[1]}', (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (210, 210, 210), 2)
-                except:
-                    pass
-                #frame = cv2.resize(frame,(540,300))  # 縮小尺寸，加快速度
-                # 將按鈕說明寫在圖上
-                cv2.putText(frame, self.name, (int(self.video_width - 180), int(self.video_height-20)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (210, 210, 210), 2)
-                cv2.putText(frame, 'Buttons:', (10, int(self.video_height-110)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (210, 210, 210), 2)
-                cv2.putText(frame, '"m": Change Move Mode', (10, int(self.video_height-80)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (210, 210, 210), 2)
-                cv2.putText(frame, '"r": Reset Camera', (10, int(self.video_height-50)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (210, 210, 210), 2)
-                cv2.putText(frame, '"q": quit...', (10, int(self.video_height-20)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (210, 210, 210), 2)
-
-                cv2.imshow(self.name, frame)
-                keyName = cv2.waitKey(1)  & 0xFF
-                
-                if keyName == ord('q'):
-                    break
-                if keyName == ord('r'):
-                    self.reset_servo()
-                if keyName == ord('s'):
-                    self.show_servo_position()
-                if keyName == ord('m'):
-                    if self.easy_count:
-                        self.easy_count = False
-                        print('>>開啟「距中心點距離量」移動模式...')
-                    else:
-                        self.easy_count = True
-                        print('>>開啟「每次 1 刻度」移動模式')
-                if keyName == ord('a'):
-                    area = cv2.selectROI(self.name, frame, showCrosshair=False, fromCenter=False)
-                    print(f'area = {area}')
-                    self.tracker.init(frame, area)    # 初始化追蹤器
-                    self.tracking = True              # 設定可以開始追蹤
-                    self.light_on()
-                        
+    
                 # 沒在追蹤也沒在中心位置太久，就恢復原位
                 if not self.tracking:
                     if self.idle_count == 0:
@@ -376,27 +399,35 @@ class servo_control:
                 else:
                     # 開始追蹤
                     success, point = self.tracker.update(frame)   # 追蹤成功後，不斷回傳左上和右下的座標
+                    p1, p2 = [], []
                     if success and point:
-                        p1, p2 = [], []
+                        print('>>正在追蹤:')
                         print(f'point = {point}')
                         p1 = [int(point[0]), int(point[1])]
                         p2 = [int(point[0] + point[2]), int(point[1] + point[3])]
                         print(f'p1 = {p1}')
                         print(f'p2 = {p2}')
-                        # 根據座標，繪製四邊形，框住要追蹤的物件
-                        cv2.rectangle(frame, tuple(p1), tuple(p2), (0, 0, 255), 3)  
-        
+                    else:
+                        self.reset_count += 1
+                        print(f'>>追蹤的物件消失，({self.reset_count}/{self.time_to_reset}輪)後重置，回復原位')
+                        if self.reset_count >= self.time_to_reset:
+                            self.tracking = False
+                            self.reset_servo()
+                    
                     # 追蹤移動攝影機對齊追蹤物體的中心
                     if  p1 and p2:
+                        # 根據座標，繪製四邊形，框住要追蹤的物件
+                        cv2.rectangle(frame, tuple(p1), tuple(p2), (0, 0, 255), 3)
+                        
                         self.tracking_ud = (p1[1] + p2[1]) / 2
                         self.tracking_lr = (p1[0] + p2[0]) / 2
                         
                         # 計算需要位移的量
-                        self.count_diff()
+                        self.count_diff(self.tracking_lr, self.tracking_ud)
                         
                         # 移動鏡頭
-                        self.move_updown(self.diff_ud)
-                        self.move_leftright(self.diff_lr)
+                        self.move_updown(self.step_ud)
+                        self.move_leftright(self.step_lr)
                    
                 if self.mouse_clicked_not_up:
                     # 點擊不放，就持續往該點位方向移動
@@ -417,7 +448,39 @@ class servo_control:
                         # 用移動量去計算
                         self.move_updown(self.step_ud)
                         self.move_leftright(self.step_lr)
+            
+                # 繪製所有說明文字
+                try:
+                    cv2.putText(frame, f'X={self.mouse_xy[0]}, Y={self.mouse_xy[1]}', (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (210, 210, 210), 2)
+                except:
+                    pass
+                #frame = cv2.resize(frame,(540,300))  # 縮小尺寸，加快速度
+                # 將按鈕說明寫在圖上
+                cv2.putText(frame, self.name, (int(self.video_width - 180), int(self.video_height-20)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (210, 210, 210), 2)
+                cv2.putText(frame, 'Buttons:', (10, int(self.video_height-110)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (210, 210, 210), 2)
+                cv2.putText(frame, '"m": Change Move Mode', (10, int(self.video_height-80)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (210, 210, 210), 2)
+                cv2.putText(frame, '"r": Reset Camera', (10, int(self.video_height-50)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (210, 210, 210), 2)
+                cv2.putText(frame, '"q": quit...', (10, int(self.video_height-20)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (210, 210, 210), 2)
+
+                cv2.imshow(self.name, frame)
+                keyName = cv2.waitKey(1)  & 0xFF
                 
+                if keyName == ord('q'):
+                    break
+                if keyName == ord('r'):
+                    self.tracking = False
+                    self.reset_servo()
+                if keyName == ord('s'):
+                    self.show_servo_position()
+                if keyName == ord('m'):
+                    self.chang_mode()
+                if keyName == ord('a'):
+                    area = cv2.selectROI(self.name, frame, showCrosshair=False, fromCenter=False)
+                    print(f'area = {area}')
+                    self.tracker.init(frame, area)    # 初始化追蹤器
+                    self.tracking = True              # 設定可以開始追蹤
+                    self.light_on()
+                    
             self.cap.release()
             cv2.destroyAllWindows()
         except:
@@ -425,6 +488,6 @@ class servo_control:
             print(x)
 
 if __name__ == '__main__':
-    Guardian = servo_control('COM7', 'COM7')
+    Guardian = LuminaGuardian('COM7', 'COM7')
 
 
