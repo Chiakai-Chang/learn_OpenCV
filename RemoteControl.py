@@ -30,7 +30,7 @@ class LuminaGuardian:
     name = 'Lumina Guardian'
     
     # 版本號
-    version = '20231224_1'
+    version = '20231224_2'
     
     # Pin 
     Pin_up_down    = 1 # 黃線, PIN 10, 40 ~ 160
@@ -77,7 +77,7 @@ class LuminaGuardian:
     
     # 啟動追蹤條件
     track_wait_start = 0
-    hold_to_activate_tracking = 0.1
+    hold_to_activate_tracking = 0.4
     hold_lapse_time = 0
     current_tracking_area = [] # 當下 Tracking 的位置
     
@@ -212,7 +212,7 @@ class LuminaGuardian:
         send_servo_command(
             self.controller_on,
             self.Pin_on_off,
-            180,
+            160,
             )
         
         print('>>Servo 位置已歸零...')
@@ -226,7 +226,7 @@ class LuminaGuardian:
 
     def light_off(self):
         self.current_onoff = 0
-        command = {"servoNumber": self.Pin_on_off, "position": 180}
+        command = {"servoNumber": self.Pin_on_off, "position": 160}
         json_command = json.dumps(command) + "\n" 
         print(json_command)
         self.controller_on.write(json_command.encode('utf-8'))
