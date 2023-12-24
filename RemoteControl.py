@@ -13,10 +13,10 @@ import json
 
 def send_servo_command(ser, servo_number, position):
     """
-    向 ESP32S3 发送伺服电机控制命令。
-    :param ser: 串行端口对象
-    :param servo_number: 伺服电机编号
-    :param position: 伺服电机的目标位置
+    向 ESP32S3 發送伺服器馬達控制命令。
+    :param ser:序列埠對象
+    :paramservo_number: 伺服馬達編號
+    :param position: 伺服馬達的目標位置
     """
     command = {"servoNumber": servo_number, "position": position}
     print(command)
@@ -30,7 +30,7 @@ class LuminaGuardian:
     name = 'Lumina Guardian'
     
     # 版本號
-    version = '20231224_0'
+    version = '20231224_1'
     
     # Pin 
     Pin_up_down = 1      # 橘(銀)線, PIN 10, 40 ~ 160
@@ -69,7 +69,7 @@ class LuminaGuardian:
     # tracking box 預設大小
     # 因為用 ROI 框左上右下的方式，操作太複雜沒有爽感
     # 所以改用直接一點就追蹤
-    tracking_box_size = 0.4
+    tracking_box_size = 0.2
     # tracking_box = (x, y, w, h)
     # x 和 y 座標標識了選定區域的起始點 (0, 0 在左上)
     # w 和 h 描述了從這個起點開始的區域的寬度和高度
@@ -79,6 +79,7 @@ class LuminaGuardian:
     track_wait_start = 0
     hold_to_activate_tracking = 0.5
     hold_lapse_time = 0
+    current_tracking_area = [] # 當下 Tracking 的位置
     
     # 繪製追蹤的 Box
     tracking_point_to_draw = []
@@ -116,7 +117,7 @@ class LuminaGuardian:
             camera_id = 1, # 因為筆電幾乎都有內建，所以預設不是 0
             # 點擊以後，要以多大的 Box 去追蹤
             # 是相對於顯示畫面的大小比例
-            tracking_box_size = 0.4,
+            tracking_box_size = 0.2,
             ):
     
         self.COM_PORT_udlr = COM_PORT_udlr
@@ -179,12 +180,12 @@ class LuminaGuardian:
         if y < 0:
             y = 0 # 以免 box 超出鏡頭
             
-        w = self.tracking_width / 2
+        w = self.tracking_width
         if (x + w) > self.video_width:
             # 以免 box 超出鏡頭
             w = self.video_width - x
             
-        h = self.tracking_height / 2
+        h = self.tracking_height
         if (y + h) > self.video_height:
             # 以免 box 超出鏡頭
             w = self.video_height - y
@@ -336,12 +337,13 @@ class LuminaGuardian:
            
            # 如果開啟著 Tracking 點 Box 就關閉 Tracking
            if self.tracking:
-               tx, ty, tw, th = self.tracking_box
+               tx, ty, tw, th = self.current_tracking_area
                if tx <= x <= (tx+tw):
                    if ty <= y <= (ty + th):
                        print('>>停止追蹤...')
                        self.tracking = False
-                       self.light_off()
+                       #self.light_off()
+                       self.current_tracking_area = []
         
         if event == cv2.EVENT_RBUTTONDOWN:
             # 右鍵開關燈
@@ -357,7 +359,7 @@ class LuminaGuardian:
         if event == cv2.EVENT_LBUTTONUP:
             self.mouse_clicked_not_up = False
             
-            # 計算是否是在畫 ROI BBox
+            # 計算是否是在 Tracking Box
             self.hold_lapse_time = time.time() - self.track_wait_start
             if self.hold_lapse_time >= self.hold_to_activate_tracking:
                 # 計算 Tracking box
@@ -366,7 +368,7 @@ class LuminaGuardian:
                 print(f'Tracking Box: {self.tracking_box}')
                 self.tracker.init(frame, area)    # 初始化追蹤器
                 self.tracking = True              # 設定可以開始追蹤
-                self.light_on()
+                #self.light_on()
     
     def show_servo_position(self):
         print('>>當前 Servo Postions:')
@@ -409,6 +411,7 @@ class LuminaGuardian:
                         p2 = [int(point[0] + point[2]), int(point[1] + point[3])]
                         print(f'p1 = {p1}')
                         print(f'p2 = {p2}')
+                        self.current_tracking_area = point
                     else:
                         self.reset_count += 1
                         print(f'>>追蹤的物件消失，({self.reset_count}/{self.time_to_reset}輪)後重置，回復原位')
@@ -459,6 +462,8 @@ class LuminaGuardian:
                 #frame = cv2.resize(frame,(540,300))  # 縮小尺寸，加快速度
                 # 將按鈕說明寫在圖上
                 cv2.putText(frame, self.name, (int(self.video_width - 180), int(self.video_height-20)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (210, 210, 210), 2)
+                cv2.putText(frame, 'Mouse:', (10, int(self.video_height-170)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (210, 210, 210), 2)
+                cv2.putText(frame, 'Hold to Track, Click to Cancel', (10, int(self.video_height-140)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (210, 210, 210), 2)
                 cv2.putText(frame, 'Buttons:', (10, int(self.video_height-110)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (210, 210, 210), 2)
                 cv2.putText(frame, '"m": Change Move Mode', (10, int(self.video_height-80)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (210, 210, 210), 2)
                 cv2.putText(frame, '"r": Reset Camera', (10, int(self.video_height-50)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (210, 210, 210), 2)
@@ -481,7 +486,7 @@ class LuminaGuardian:
                     print(f'area = {area}')
                     self.tracker.init(frame, area)    # 初始化追蹤器
                     self.tracking = True              # 設定可以開始追蹤
-                    self.light_on()
+                    #self.light_on()
                     
             self.cap.release()
             cv2.destroyAllWindows()
@@ -490,6 +495,13 @@ class LuminaGuardian:
             print(x)
 
 if __name__ == '__main__':
-    Guardian = LuminaGuardian('COM7', 'COM7')
+    Guardian = LuminaGuardian(
+        # 控制上下左右的 Serial Port
+        'COM7', 
+        # 控制開關的 Serial Port (可以同上)
+        'COM7',
+        # 點擊以後自動繪製的 tracking_box 佔畫面比例
+        tracking_box_size = 0.2,
+        )
 
 
