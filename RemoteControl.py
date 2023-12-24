@@ -33,9 +33,9 @@ class LuminaGuardian:
     version = '20231224_1'
     
     # Pin 
-    Pin_up_down = 1      # 橘(銀)線, PIN 10, 40 ~ 160
-    Pin_left_right = 2   # 綠線,     PIN 13, 40 ~ 160
-    Pin_on_off = 3       # 橘線,     PIN 3,  70 == on, 180 == off
+    Pin_up_down    = 1 # 黃線, PIN 10, 40 ~ 160
+    Pin_left_right = 2 # 白線, PIN 13, 40 ~ 160
+    Pin_on_off     = 3 # 橘線, PIN 3,  70 == on, 180 == off
 
     # 紀錄 servo 目前數值
     current_ud_value = 90
@@ -77,7 +77,7 @@ class LuminaGuardian:
     
     # 啟動追蹤條件
     track_wait_start = 0
-    hold_to_activate_tracking = 0.5
+    hold_to_activate_tracking = 0.1
     hold_lapse_time = 0
     current_tracking_area = [] # 當下 Tracking 的位置
     
@@ -86,7 +86,7 @@ class LuminaGuardian:
     
     # 物件消失後，多久恢復原位
     reset_count = 0
-    time_to_reset = 100 # 個 loop
+    time_to_reset = 150 # 個 loop
     
     # 模式切換
     # 0 = 預設 (移動模式: 距離變速模式)
@@ -368,6 +368,7 @@ class LuminaGuardian:
                 print(f'Tracking Box: {self.tracking_box}')
                 self.tracker.init(frame, area)    # 初始化追蹤器
                 self.tracking = True              # 設定可以開始追蹤
+                self.reset_count = 0
                 #self.light_on()
     
     def show_servo_position(self):
@@ -418,6 +419,7 @@ class LuminaGuardian:
                         if self.reset_count >= self.time_to_reset:
                             self.tracking = False
                             self.reset_servo()
+                            self.reset_count = 0
                     
                     # 追蹤移動攝影機對齊追蹤物體的中心
                     if  p1 and p2:
@@ -499,7 +501,7 @@ if __name__ == '__main__':
         # 控制上下左右的 Serial Port
         'COM7', 
         # 控制開關的 Serial Port (可以同上)
-        'COM7',
+        'COM4',
         # 點擊以後自動繪製的 tracking_box 佔畫面比例
         tracking_box_size = 0.2,
         )
